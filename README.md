@@ -17,6 +17,8 @@ This repository contains the code and resources for the research project "Consis
 - Providing a framework for simulating Fibonacci TQC on standard qubit platforms.
 
 ## Project Structure
+
+```text
 quasicrystal-inflation-code/
 ├── .git/                     # Git internal files
 ├── .venv/                    # Python virtual environment (ignored by Git)
@@ -25,7 +27,7 @@ quasicrystal-inflation-code/
 ├── README.md                 # This file
 ├── paper/                    # LaTeX source for the research paper
 │   ├── fibonacci_anyon_qic_simulation.tex
-│   └── ...
+│   └── references.bib        # And other paper-related files (images, etc.)
 ├── src/                      # Core library code
 │   └── qic_core.py
 ├── simulations/              # Example scripts to run simulations and verifications
@@ -35,6 +37,7 @@ quasicrystal-inflation-code/
 ├── notebooks/                # (Optional) Jupyter notebooks for analysis, visualization
 │   └── N3_results_analysis.ipynb
 └── requirements.txt          # Python package dependencies
+```
 
 ## Setup and Installation
 
