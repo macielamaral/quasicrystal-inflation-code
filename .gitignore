@@ -172,3 +172,25 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# LaTeX auxiliary files
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.synctex.gz
+paper/*.toc
+paper/*.bbl
+paper/*.blg
+
+# Large data files
+data/
+*.npy
+*.npz
+
+# IDE specific
+.vscode/
+.idea/
+
+
