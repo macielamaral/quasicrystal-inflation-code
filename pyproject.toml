@@ -1,0 +1,19 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qic_framework" # Choose a package name
+version = "0.1.0"
+# Add other metadata like authors, description if desired
+dependencies = [
+    "numpy",
+    "scipy",
+    # Add qiskit, qiskit-aer if they are hard requirements
+    "qiskit>=1.0",
+    "qiskit-aer>=0.13"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"] # Tells setuptools to find packages under src

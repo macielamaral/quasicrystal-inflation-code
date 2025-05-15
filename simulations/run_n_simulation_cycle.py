@@ -1,4 +1,4 @@
-# run_n3_simulation_cycle.py
+# run_n_simulation_cycle.py
 # Performs the Prepare->Braid->Project->Analyze simulation cycle for N=3.
 
 import numpy as np
@@ -8,6 +8,7 @@ import traceback
 # Import functions from the core library module
 try:
     import qic_core
+    #from src import qic_core
 except ImportError:
     print("ERROR: Failed to import qic_core.py.")
     print("       Make sure qic_core.py is in the same directory or Python path.")
@@ -19,7 +20,7 @@ if qic_core.QISKIT_AVAILABLE:
     from qiskit.quantum_info import SparsePauliOp, Statevector
     # Note: AerEstimator is imported within qic_core if available
 else:
-    print("ERROR: Qiskit is required for this script (run_n3_simulation_cycle.py) but is not available.")
+    print("ERROR: Qiskit is required for this script (run_n_simulation_cycle.py) but is not available.")
     exit() # Exit if Qiskit is essential and not found
 
 
