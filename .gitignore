@@ -173,7 +173,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-
+# IMPORTANT: Replace with the actual name of the IBM Eagle processor you have access to
+# e.g., "ibm_sherbrooke", "ibm_brisbane", etc.
 # LaTeX auxiliary files
 paper/*.aux
 paper/*.log
@@ -194,4 +195,5 @@ data/
 .vscode/
 .idea/
 
-
+# Data folder
+data/
