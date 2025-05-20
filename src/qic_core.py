@@ -118,7 +118,7 @@ def get_qic_basis(n):
     # Convert strings to vectors
     dim_H = 2**n
     qic_basis_vectors = []
-    print(f"  Generating {dim_QIC} vectors (dim {dim_H}) for basis: {filtered_strings}")
+    #print(f"  Generating {dim_QIC} vectors (dim {dim_H}) for basis: {filtered_strings}")
     for s in filtered_strings:
         vec = np.zeros(dim_H, dtype=complex)
         try:

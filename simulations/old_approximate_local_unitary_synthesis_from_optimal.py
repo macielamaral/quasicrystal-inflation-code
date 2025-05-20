@@ -44,7 +44,7 @@ TARGET_G_TILDE_FILE = 'data/optimal_local_approximators/G_tilde_N5_kop1_act1.npy
 TARGET_G_TILDE_FILE = 'data/optimal_local_approximators/G_tilde_N5_kop2_act2.npy' # <--- !!! SET THIS !!!
 TARGET_G_TILDE_FILE = 'data/optimal_local_approximators/G_tilde_N5_kop3_act2.npy' # <--- !!! SET THIS !!!
 
-TARGET_G_TILDE_FILE = 'data/optimal_local_approximators/G_tilde_N10_kop0_act0.npy' # <--- !!! SET THIS !!!
+TARGET_G_TILDE_FILE = 'data/optimal_local_approximators/G_tilde_N10_kop4_act4.npy' # <--- !!! SET THIS !!!
 
 # Ansatz Configuration
 NUM_ANSATZ_LAYERS = 2

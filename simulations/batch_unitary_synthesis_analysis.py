@@ -7,162 +7,216 @@ import time
 import csv
 import glob
 
+# Qiskit imports (assuming QISKIT_AVAILABLE is handled by qst or checked before use)
 from qiskit import QuantumCircuit, transpile
-from qiskit.circuit import ParameterVector
+# ParameterVector not strictly needed here if qst.create_3q_ansatz handles parameters internally
+# from qiskit.circuit import ParameterVector 
 from qiskit.quantum_info import Operator
 from scipy.optimize import minimize
 
-# ==== User Configuration ====
+# Import your synthesis tools module
+try:
+    import qic_synthesis_tools as qst
+except ImportError:
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # Assuming 'simulations' is sibling to 'src' where qic_synthesis_tools might be,
+        # or qic_synthesis_tools is in 'src' and 'src' is added to path.
+        # This path adjustment might need to be specific to your project structure.
+        # For simplicity, let's assume qic_synthesis_tools.py is in a directory
+        # that's already in sys.path or in the same directory as this script.
+        # If it's in ../src relative to this script's parent:
+        # src_dir = os.path.join(os.path.dirname(current_dir), 'src') 
+        # if src_dir not in sys.path:
+        #    sys.path.insert(0, src_dir)
+        import qic_synthesis_tools as qst
+        print("Successfully imported qic_synthesis_tools (path might have been adjusted).")
+    except ImportError as e_qst:
+        print(f"ERROR: Could not import qic_synthesis_tools.py: {e_qst}")
+        print("       Ensure qic_synthesis_tools.py is in your Python path or src directory.")
+        exit()
 
-#GIDEAL_FILES = [
-#    'data/optimal_local_approximators/Gideal_L.npy',
-#    'data/optimal_local_approximators/Gideal_M.npy',
-#    'data/optimal_local_approximators/Gideal_R.npy',
-#    # Add more as needed
-#]
-# Automatically find all .npy files in the directory
+
+# ==== User Configuration ====
+IDEAL_GATES_DATA_DIR = "data/optimal_local_approximators"
 GIDEAL_FILES = sorted(
     glob.glob(
-        os.path.join(
-            "data", "optimal_local_approximators", "*.npy"
-        )
+        os.path.join(IDEAL_GATES_DATA_DIR, "*.npy")
     )
 )
+if not GIDEAL_FILES:
+    print(f"WARNING: No .npy files found in {IDEAL_GATES_DATA_DIR}. Check path and files.")
 
-NUM_LAYERS_LIST = [1, 2, 3, 4]
-MAX_OPTIMIZATION_ITER = 200
+NUM_LAYERS_LIST = [1, 2, 3, 4] # List of ansatz layers to try for each target
+MAX_OPTIMIZATION_ITER = 200    # Max iterations for scipy.minimize
+
+# Configuration for the ansatz structure within qst.create_3q_ansatz
+# This should match the expectation of qst.create_3q_ansatz
+# For RZ-SX-RZ-SX-RZ sequence on each qubit, this is 3 parameterized RZ gates.
+NUM_ROT_PARAMS_PER_QUBIT_PER_LAYER = 3 
 
 # Output summary CSV
-RESULTS_CSV = "data/gate_synthesis_results.csv"
+RESULTS_DIR_MAIN = 'data'
+RESULTS_SUBDIR_BATCH_SYNTH = 'batch_synthesis_results'
+RESULTS_CSV = os.path.join(RESULTS_DIR_MAIN, RESULTS_SUBDIR_BATCH_SYNTH, "gate_synthesis_batch_summary.csv")
+# =========================
 
-# ==== Ansatz Definition ====
-
-def create_3q_ansatz(num_layers):
-    num_qubits = 3
-    # Each layer: 3 qubits × 3 params (Rz, sx, Rz, sx, Rz), as before
-    params_per_single_layer = 3 * num_qubits
-    total_params = num_layers * params_per_single_layer
-    qc = QuantumCircuit(num_qubits)
-    params = ParameterVector('θ', total_params)
-    param_idx = 0
-
-    for l_idx in range(num_layers):
-        for q_idx in range(num_qubits):
-            qc.rz(params[param_idx], q_idx); param_idx += 1
-            qc.sx(q_idx)
-            qc.rz(params[param_idx], q_idx); param_idx += 1
-            qc.sx(q_idx)
-            qc.rz(params[param_idx], q_idx); param_idx += 1
-        qc.ecr(0, 1)
-        qc.ecr(1, 2)
-        if num_qubits > 2 and l_idx % 2 == 0:
-            qc.ecr(0, 2)
-
-    return qc, params
-
-def objective_function(param_values, ansatz_circuit_template, unbound_params_vector, target_unitary_matrix_np):
-    param_dict = {unbound_params_vector[i]: param_values[i] for i in range(len(param_values))}
-    bound_circuit = ansatz_circuit_template.assign_parameters(param_dict)
+def run_synthesis_for_target(target_unitary_file, num_ansatz_layers, 
+                             num_rot_params_config, max_iters):
+    """
+    Loads a target unitary, creates an ansatz, optimizes, and returns results.
+    """
+    print(f"  Synthesizing {os.path.basename(target_unitary_file)} with {num_ansatz_layers} layer(s)...")
+    
+    # 1. Load target unitary
     try:
-        ansatz_unitary_op = Operator(bound_circuit)
-        ansatz_unitary_np = ansatz_unitary_op.data 
+        target_unitary_matrix = np.load(target_unitary_file)
+        if target_unitary_matrix.shape != (8,8):
+            print(f"    ERROR: Target matrix in {target_unitary_file} has shape {target_unitary_matrix.shape}, expected (8,8). Skipping.")
+            return None
+        if not Operator(target_unitary_matrix).is_unitary(atol=1e-7): # Check if loaded is unitary
+            u_udag_diff_norm = np.linalg.norm(target_unitary_matrix @ target_unitary_matrix.conj().T - np.eye(8), 'fro')
+            print(f"    WARNING: Loaded target matrix from {target_unitary_file} may not be perfectly unitary itself! ||UUdag-I||_F = {u_udag_diff_norm:.3e}")
     except Exception as e:
-        print(f"Error in unitary extraction: {e}")
-        return 2.0 
-    d_squared = (2 ** ansatz_circuit_template.num_qubits) ** 2
-    trace_val = np.trace(np.conj(target_unitary_matrix_np).T @ ansatz_unitary_np)
-    fidelity = (np.abs(trace_val) ** 2) / d_squared
-    infidelity = 1.0 - fidelity
-    return infidelity
-
-# ==== Main Analysis Loop ====
-
-def run_synthesis(target_file, num_layers, max_iters):
-    # 1. Load
-    target = np.load(target_file)
-    if target.shape != (8,8):
-        print(f"ERROR: {target_file} has shape {target.shape}, expected (8,8). Skipping.")
+        print(f"    ERROR loading target unitary from {target_unitary_file}: {e}")
         return None
-    if not Operator(target).is_unitary(atol=1e-7):
-        print(f"WARNING: {target_file} is not perfectly unitary.")
 
-    # 2. Ansatz
-    qc, params = create_3q_ansatz(num_layers)
-    if len(params) == 0:
-        print("ERROR: Ansatz has no parameters.")
+    # 2. Create ansatz using the imported tool
+    #    qst.create_3q_ansatz now expects (num_layers, num_rot_params_per_qubit_per_layer)
+    #    and returns only the QuantumCircuit object (qc_template).
+    ansatz_qc_template = qst.create_3q_ansatz(num_ansatz_layers, num_rot_params_config)
+    
+    # Get the actual Parameter objects present in the circuit template and sort them
+    unbound_params_in_circuit = sorted(list(ansatz_qc_template.parameters), key=lambda p: p.name)
+    num_actual_params = len(unbound_params_in_circuit)
+
+    if num_actual_params == 0 and num_ansatz_layers > 0 : # Check if any parameters were actually added
+        print(f"    ERROR: Ansatz for {num_ansatz_layers} layers resulted in no parameters. Check qst.create_3q_ansatz.")
         return None
+    if num_actual_params == 0 and num_ansatz_layers == 0:
+        print(f"    Ansatz for 0 layers has no parameters. Evaluating fixed structure.")
+        # Fall through to objective_function with empty params
 
     # 3. Optimize
-    initial_params = np.random.rand(len(params)) * 2 * np.pi
+    initial_params = np.random.rand(num_actual_params) * 2 * np.pi
+    
+    # print(f"    Starting optimization with {num_actual_params} parameters...")
+    optimization_start_time = time.time()
     res = minimize(
-        objective_function,
+        qst.objective_function, # Using the objective function from the tools module
         initial_params,
-        args=(qc, params, target),
+        args=(ansatz_qc_template, unbound_params_in_circuit, target_unitary_matrix),
         method='L-BFGS-B',
-        options={'maxiter': max_iters, 'disp': False, 'eps': 1e-9}
+        options={'maxiter': max_iters, 'disp': False, 'eps': 1e-9, 'ftol': 1e-10, 'gtol': 1e-7}
     )
+    optimization_duration = time.time() - optimization_start_time
+    # print(f"    Optimization finished in {optimization_duration:.2f}s.")
+
+    if not res.success:
+        print(f"    WARNING: Optimization for {os.path.basename(target_unitary_file)} (layers={num_ansatz_layers}) not fully converged: {res.message}")
+
     min_infidelity = res.fun
-    optimal_params = res.x
+    optimal_params_values = res.x
     achieved_fidelity = 1.0 - min_infidelity
 
     # 4. Gate count (transpile to basis for resource count)
-    optimized_circuit = qc.assign_parameters({params[i]: optimal_params[i] for i in range(len(optimal_params))})
-    transpiled = transpile(optimized_circuit, optimization_level=3)
-    ops_counts = transpiled.count_ops()
-    two_qubit_gates = sum(ops_counts.get(g, 0) for g in ['cx', 'ecr', 'cz', 'swap', 'rzz', 'rzx', 'zz'])
+    optimal_param_dict = {unbound_params_in_circuit[i]: optimal_params_values[i] for i in range(len(optimal_params_values))}
+    optimized_circuit = ansatz_qc_template.assign_parameters(optimal_param_dict)
+    
+    # Transpile for a generic basis to count 1Q/2Q gates, not specific to a backend here
+    # Using a common basis set for estimation
+    try:
+        transpiled_optimized_circuit = transpile(optimized_circuit, basis_gates=['u3', 'cx', 'ecr', 'id'], optimization_level=3)
+        ops_counts = transpiled_optimized_circuit.count_ops()
+        # More robust count for any 2Q gate names Qiskit might use after transpilation
+        two_qubit_gates = 0
+        known_2q_gate_names = {'cx', 'ecr', 'cz', 'swap', 'rzz', 'rzx', 'zz', 'csx', 'cy', 'cp', 'crx', 'cry', 'crz', 'ch'} # Expanded list
+        for gate, count in ops_counts.items():
+            if gate in known_2q_gate_names:
+                two_qubit_gates += count
+    except Exception as e_transpile:
+        print(f"    Error during transpilation for resource counting: {e_transpile}")
+        ops_counts = {"error": str(e_transpile)}
+        two_qubit_gates = -1 # Indicate error
 
     return {
-        "file": os.path.basename(target_file),
-        "num_layers": num_layers,
-        "params": optimal_params,
+        "file": os.path.basename(target_unitary_file),
+        "num_layers": num_ansatz_layers,
+        "params_values": optimal_params_values,
         "min_infidelity": min_infidelity,
         "achieved_fidelity": achieved_fidelity,
-        "num_gates_total": sum(ops_counts.values()),
+        "num_gates_total": sum(ops_counts.values()) if isinstance(ops_counts, dict) else -1,
         "num_two_qubit_gates": two_qubit_gates,
-        "ops_counts": dict(ops_counts),
+        "ops_counts": dict(ops_counts) if isinstance(ops_counts, dict) else ops_counts,
     }
 
 def main():
-    results = []
-    start = time.time()
+    all_synthesis_results = []
+    script_start_time = time.time()
 
-    print("Starting batch local unitary synthesis analysis...\n")
+    print("Starting Batch Local Unitary Synthesis Analysis...\n")
+    if not GIDEAL_FILES:
+        print("No target .npy files found to process. Exiting.")
+        return
 
-    for gfile in GIDEAL_FILES:
-        for layers in NUM_LAYERS_LIST:
-            print(f"Analyzing {gfile} | Layers: {layers}")
-            out = run_synthesis(gfile, layers, MAX_OPTIMIZATION_ITER)
-            if out:
-                results.append(out)
-                print(f"  Fidelity: {out['achieved_fidelity']:.6f} | 2Q gates: {out['num_two_qubit_gates']} | Total gates: {out['num_gates_total']}")
+    for target_file_path in GIDEAL_FILES:
+        print(f"Processing Target Unitary: {os.path.basename(target_file_path)}")
+        for layers_count in NUM_LAYERS_LIST:
+            print(f"  Trying with {layers_count} ansatz layer(s)...")
+            synthesis_output = run_synthesis_for_target(
+                target_file_path, 
+                layers_count, 
+                NUM_ROT_PARAMS_PER_QUBIT_PER_LAYER, # Pass the config for num_rot_params
+                MAX_OPTIMIZATION_ITER
+            )
+            if synthesis_output:
+                all_synthesis_results.append(synthesis_output)
+                print(f"    Fidelity: {synthesis_output['achieved_fidelity']:.6f} | 2Q gates: {synthesis_output['num_two_qubit_gates']} | Total gates: {synthesis_output['num_gates_total']}")
             else:
-                print("  Synthesis failed for this configuration.")
+                print(f"    Synthesis failed for {os.path.basename(target_file_path)} with {layers_count} layer(s).")
+        print("-" * 30)
 
-    # Print best result per file (highest fidelity, then lowest two-qubit gate count)
-    print("\n=== Best synthesis per target unitary ===")
-    for gfile in GIDEAL_FILES:
-        candidates = [r for r in results if r['file'] == os.path.basename(gfile)]
-        if not candidates: continue
-        best = max(candidates, key=lambda x: (x['achieved_fidelity'], -x['num_two_qubit_gates']))
-        print(f"{best['file']} | Fidelity: {best['achieved_fidelity']:.6f} | Layers: {best['num_layers']} | 2Q gates: {best['num_two_qubit_gates']} | Total gates: {best['num_gates_total']}")
-        print(f"  OpCounts: {best['ops_counts']}")
 
-    # Write to CSV
-    print(f"\nWriting results to {RESULTS_CSV}")
-    with open(RESULTS_CSV, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=[
+    # Prepare CSV output
+    results_output_dir = os.path.join(RESULTS_DIR_MAIN, RESULTS_SUBDIR_BATCH_SYNTH)
+    if not os.path.exists(results_output_dir):
+        os.makedirs(results_output_dir)
+        print(f"Created results directory: {results_output_dir}")
+
+    print(f"\nWriting all synthesis results to {RESULTS_CSV}")
+    with open(RESULTS_CSV, 'w', newline='') as f_csv:
+        fieldnames = [
             "file", "num_layers", "min_infidelity", "achieved_fidelity",
-            "num_gates_total", "num_two_qubit_gates", "ops_counts", "params"
-        ])
+            "num_gates_total", "num_two_qubit_gates", "ops_counts", "params_values"
+        ]
+        writer = csv.DictWriter(f_csv, fieldnames=fieldnames)
         writer.writeheader()
-        for r in results:
-            row = r.copy()
-            row['ops_counts'] = str(row['ops_counts'])
-            row['params'] = np.array2string(row['params'], separator=',', precision=4)
-            writer.writerow(row)
+        for r_data in all_synthesis_results:
+            row_to_write = r_data.copy()
+            # Convert numpy array of params to string for CSV
+            if 'params_values' in row_to_write and isinstance(row_to_write['params_values'], np.ndarray):
+                row_to_write['params_values'] = np.array2string(row_to_write['params_values'], separator=',', precision=5, max_line_width=np.inf)
+            if 'ops_counts' in row_to_write and isinstance(row_to_write['ops_counts'], dict):
+                 row_to_write['ops_counts'] = str(row_to_write['ops_counts']) # Convert dict to string
+            writer.writerow(row_to_write)
+    
+    print("\n=== Best Synthesis per Target Unitary (Highest Fidelity, then Lowest 2Q Gates) ===")
+    for target_file_path in GIDEAL_FILES:
+        target_filename = os.path.basename(target_file_path)
+        candidates_for_file = [r for r in all_synthesis_results if r['file'] == target_filename and r['num_two_qubit_gates'] != -1]
+        if not candidates_for_file:
+            print(f"No successful synthesis results for {target_filename}")
+            continue
+        
+        # Sort by fidelity (descending), then by num_two_qubit_gates (ascending)
+        best_candidate = sorted(candidates_for_file, key=lambda x: (x['achieved_fidelity'], -x['num_two_qubit_gates']), reverse=True)[0]
+        
+        print(f"{best_candidate['file']:<35} | Fidelity: {best_candidate['achieved_fidelity']:.6f} | Layers: {best_candidate['num_layers']:<2} | "
+              f"2Q gates: {best_candidate['num_two_qubit_gates']:<3} | Total gates: {best_candidate['num_gates_total']:<4}")
+        # print(f"  OpCounts: {best_candidate['ops_counts']}") # Can be verbose
 
-
-    print(f"\nTotal elapsed time: {time.time()-start:.1f} seconds.")
+    total_script_duration = time.time() - script_start_time
+    print(f"\nTotal script execution time: {total_script_duration:.1f} seconds.")
 
 if __name__ == "__main__":
     main()
