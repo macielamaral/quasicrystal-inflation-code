@@ -24,7 +24,7 @@ except ImportError:
 
 
 
-N = 4  # Number of qubits/sites (small for clarity)
+N = 5  # Number of qubits/sites (small for clarity)
 PHI = (1 + np.sqrt(5)) / 2
 PHI_INV = 1.0 / PHI
 PHI_SQ_INV = PHI**(-2)
@@ -58,10 +58,10 @@ for k in range(N-1):
 # --- Step 6: Print matrices for inspection ---
 np.set_printoptions(precision=3, suppress=True)
 
-print("=== Temperley-Lieb (P_k^anyon) matrices on QIC subspace ===")
+#print("=== Temperley-Lieb (P_k^anyon) matrices on QIC subspace ===")
 #for k, Pk in enumerate(Pk_anyon_list):
-    #if k == (N-2):
-#    print(f"\nP_{k}^anyon:\n", Pk.toarray())
+#    if k == (N-2):
+#        print(f"\nP_{k}^anyon:\n", Pk.toarray())
 
 print("\n=== Embedded Projectors (P'_k) in full Hilbert space ===")
 #for k, Pp in enumerate(P_prime_list):
@@ -71,3 +71,21 @@ print("\n=== Embedded Projectors (P'_k) in full Hilbert space ===")
 print("\n=== Embedded Braid Generators (B'_k) ===")
 for k, Bp in enumerate(B_prime_list):
     print(f"\nB'_{k}:\n", Bp.toarray())
+
+# Load matrices
+G_ideal_L = np.load("data/optimal_local_approximators/G_tilde_N10_kop0_act0.npy")
+G_ideal_M = np.load("data/optimal_local_approximators/G_tilde_N10_kop4_act4.npy")
+G_ideal_R = np.load("data/optimal_local_approximators/G_tilde_N10_kop8_act7.npy")
+
+# Function for Frobenius norm between two matrices
+def frob_norm(A, B):
+    return np.linalg.norm(A - B, 'fro')
+
+# Compare all pairs
+norm_LM = frob_norm(G_ideal_L, G_ideal_M)
+norm_LR = frob_norm(G_ideal_L, G_ideal_R)
+norm_MR = frob_norm(G_ideal_M, G_ideal_R)
+
+print(f"||G_ideal_L - G_ideal_M||_F = {norm_LM:.6e}")
+print(f"||G_ideal_L - G_ideal_R||_F = {norm_LR:.6e}")
+print(f"||G_ideal_M - G_ideal_R||_F = {norm_MR:.6e}")
