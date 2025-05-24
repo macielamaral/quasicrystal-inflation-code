@@ -50,10 +50,11 @@ except ImportError:
 
 # --- Constants ---
 PHI = (1 + np.sqrt(5)) / 2
-PHI_INV = 1.0 / PHI
-PHI_SQ_INV = PHI**(-2) # Constant t for TL check Pk Pk+/-1 Pk = t Pk
-R_TAU_1 = np.exp(-1j * 4 * np.pi / 5.0) # Phase for Pk component in Bk
-R_TAU_TAU = np.exp(1j * 3 * np.pi / 5.0) # Phase for (I-Pk) component in Bk
+PHI_INV = (np.sqrt(5) - 1) / 2
+PHI_SQ_INV = PHI # Constant delta for TL check Pk Pk+/-1 Pk = delta^-2 Pk or Ui = delta Pi and Ui^2 = delta Ui
+R_TAU_1 = np.exp(1j * 4 * np.pi / 5.0) # Phase for Pk component in Bk
+R_TAU_TAU = np.exp(-1j * 3 * np.pi / 5.0) # Phase for (I-Pk) component in Bk R_TAU_TAU = A^-1 from Amaral2022 or KauffmanLomonaco
+# Phi * A = R_TAU_1 - R_TAU_TAU such that we can go back to Eq.14 in Amaral2022. In KauffmanLomonaco or B is their B^-1
 TOL = 1e-9 # Numerical tolerance for checks
 
 # --- Helper: Fibonacci Calculation ---
@@ -353,7 +354,9 @@ def build_B_prime_n(n_operator_idx, P_prime_n_matrix, n_qubits):
         P_prime_n_csc = P_prime_n_matrix.tocsc()
         # Formula uses P'_k (embedded projector)
         # This definition ensures B'_k acts as identity outside the QIC subspace if P'_k is zero there.
+        #B_prime_n = R_TAU_1 * P_prime_n_csc + R_TAU_TAU * (Id_N - P_prime_n_csc)
         B_prime_n = R_TAU_1 * P_prime_n_csc + R_TAU_TAU * (Id_N - P_prime_n_csc)
+        #B_prime_n = PHI * R_TAU_1 * P_prime_n_csc + PHI * R_TAU_TAU * (Id_N - P_prime_n_csc)
         print(f"  B'_{n_operator_idx} built (shape {B_prime_n.shape}, nnz={B_prime_n.nnz}).")
         return B_prime_n.tocsc()
     except Exception as e:
@@ -504,8 +507,6 @@ def check_embedded_operator_properties(P_prime_ops, B_prime_ops, n, tol=TOL):
         return False
 
     all_checks_passed = True
-    phi = (1 + np.sqrt(5)) / 2
-    phi_sq_inv = phi**-2 # TL parameter t
 
     # --- Check P' Properties ---
     print("\n* Checking P' Properties *")
@@ -538,7 +539,7 @@ def check_embedded_operator_properties(P_prime_ops, B_prime_ops, n, tol=TOL):
             idx2 = idx1 + 1
             P0p = P_prime_ops[idx1].tocsc()
             P1p = P_prime_ops[idx2].tocsc()
-            t = phi_sq_inv # TL parameter
+            t = PHI_SQ_INV**(-2)
 
             # Check P'_i P'_{i+1} P'_i = t P'_i
             lhs_tl = P0p @ P1p @ P0p
@@ -547,7 +548,7 @@ def check_embedded_operator_properties(P_prime_ops, B_prime_ops, n, tol=TOL):
             norm_P0 = sparse_norm(P0p)
             norm_diff = sparse_norm(diff_tl)
             holds = norm_diff < tol * max(1e-12, t * norm_P0) # Relative check
-            print(f"  TL (P'_{idx1}P'_{idx2}P'_{idx1} = t P'_{idx1})? {holds}. ||Diff|| = {norm_diff:.3e} (t=phi^-2)")
+            print(f"  TL (P'_{idx1}P'_{idx2}P'_{idx1} = t P'_{idx1})? {holds}. ||Diff|| = {norm_diff:.3e} (t=PHI^-2)")
             if not holds: print(f"     Max element |Diff| = {np.max(np.abs(diff_tl.toarray())) if diff_tl.nnz > 0 else 0:.3e}")
             all_checks_passed &= holds
 
@@ -558,7 +559,7 @@ def check_embedded_operator_properties(P_prime_ops, B_prime_ops, n, tol=TOL):
             norm_P1 = sparse_norm(P1p)
             norm_diff = sparse_norm(diff_tl2)
             holds = norm_diff < tol * max(1e-12, t * norm_P1) # Relative check
-            print(f"  TL (P'_{idx2}P'_{idx1}P'_{idx2} = t P'_{idx2})? {holds}. ||Diff|| = {norm_diff:.3e} (t=phi^-2)")
+            print(f"  TL (P'_{idx2}P'_{idx1}P'_{idx2} = t P'_{idx2})? {holds}. ||Diff|| = {norm_diff:.3e} (t=PHI^-2)")
             if not holds: print(f"     Max element |Diff| = {np.max(np.abs(diff_tl2.toarray())) if diff_tl2.nnz > 0 else 0:.3e}")
             all_checks_passed &= holds
     else:

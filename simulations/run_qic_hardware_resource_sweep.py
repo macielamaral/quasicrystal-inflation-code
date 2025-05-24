@@ -40,7 +40,7 @@ else:
     exit()
 
 # ===== Configuration =====
-N_QUBITS_LIST = [2, 3, 4, 5, 6, 7] # List of N_QUBITS to sweep through (e.g., start small: [2, 3])
+N_QUBITS_LIST = [2, 3, 4] # List of N_QUBITS to sweep through (e.g., start small: [2, 3])
                           # N=4 means 16x16 unitaries, N=5 means 32x32, transpilation can get slow.
 
 # --- IBM Backend Selection ---

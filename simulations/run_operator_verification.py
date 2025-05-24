@@ -22,7 +22,7 @@ else:
     print("Note: Qiskit not available, skipping Part 4 energy checks.")
 
 # === Configuration ===
-N = 3  # Set the desired N value for verification (e.g., 3, 4, 5, ..., 10)
+N = 4  # Set the desired N value for verification (e.g., 3, 4, 5, ..., 10)
 LAMBDA = 1.0 # Hamiltonian coupling constant (for energy checks)
 RUN_ENERGY_CHECKS = True # Set to False to skip Qiskit-dependent energy checks
 

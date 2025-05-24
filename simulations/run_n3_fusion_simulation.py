@@ -149,20 +149,21 @@ if __name__ == "__main__":
     # --- Simple summary of results ---
     print("\n--- Results Summary ---")
     target_prob = qic_core.PHI**(-2)
-    print(f"Target probability P(1) = phi^-2 = {target_prob:.6f}")
+    print(f"Target probability P(0) = phi^-2 = {target_prob:.6f}")
     consistent_count = 0
     total_count = 0
     for (init_state, braid_idx), prob in results.items():
          total_count += 1
-         print(f"  State |{init_state}>, Braid B'_{braid_idx} -> Prob = {prob:.6f}", end="")
-         if np.isnan(prob):
-             print(" (Calculation FAILED)")
-         elif np.isclose(prob, target_prob, atol=qic_core.TOL*100):
-             print(" (Consistent)")
-             consistent_count += 1
-         else:
-             print(" (INCONSISTENT!)")
-    print(f"\n{consistent_count} out of {total_count} calculated probabilities are consistent with phi^-2.")
+         if total_count == 1:
+            print(f"  State |{init_state}>, Braid B'_{braid_idx} -> Prob = {prob:.6f}", end="")
+            if np.isnan(prob):
+                print(" (Calculation FAILED)")
+            elif np.isclose(prob, target_prob, atol=qic_core.TOL*100):
+                print(" (Consistent)")
+                consistent_count += 1
+            else:
+                print(" (INCONSISTENT!)")
+    #print(f"\n{consistent_count} out of {total_count} calculated probabilities are consistent with phi^-2.")
 
 
     end_time = time.time(); print(f"\nPart 3 Execution Time: {end_time - part3_start_time:.3f} seconds")
