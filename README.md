@@ -1,4 +1,3 @@
-```markdown
 # Quasicrystal Inflation Code (QIC)
 
 <sub>Validated framework for simulating Fibonacci-anyon braiding on qubits</sub>
@@ -26,9 +25,7 @@ The framework has been numerically verified up to **17 qubits** and demonstrated
 ---
 
 ## Repository layout
-
-```
-
+```text
 quasicrystal-inflation-code/
 │
 ├── data/                         # Binary assets (e.g. verified B-gate)
@@ -49,8 +46,7 @@ quasicrystal-inflation-code/
 ├── requirements.txt              # Minimal Python deps
 ├── pyproject.toml (optional)     # If you prefer PEP-517 installs
 └── README.md                     # You are here
-
-````
+```
 
 ---
 
