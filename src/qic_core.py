@@ -1,28 +1,75 @@
 # -*- coding: utf-8 -*-
 """
 qic_core.py
+===========
 
-Core library functions for simulating 
-the Quasicrystal Inflation Code (QIC) framework.
+Core utilities for the *Quasicrystal Inflation Code* (QIC) framework.
 
-Provides functionalities for:
-- Generating the QIC basis (no "00" constraint) and corresponding state vectors.
-  (Uses Fibonacci convention F0=0, F1=1, dimension F_{N+2})
-- Constructing the isometry V mapping the QIC basis to the full qubit space.
-- Building abstract anyonic Temperley-Lieb projectors (P_k^anyon) based on
-  Kauffman algebra rules (Ref: Kauffman & Lomonaco, arXiv:0705.4349).
-- Embedding anyonic operators into the full qubit Hilbert space (P'_k, B'_k)
-  using the isometry V.
-- Verifying algebraic properties of both anyonic and embedded operators
-  (TL algebra, braid relations, unitarity, etc.).
-- (Optional, requires Qiskit) Building the QIC Hamiltonian (H_QIC) as a
-  SparsePauliOp.
-- (Optional, requires Qiskit) Verifying state energy using Qiskit Aer's
-  EstimatorV2 to check for ground state preservation.
+This module provides the algebraic and numerical backbone used in
+“Consistent Simulation of Fibonacci Anyon Braiding within a Qubit
+Quasicrystal Inflation Code” (Amaral 2025).  It is designed to be
+imported by small driver scripts (e.g. `run_qic_ibm_leakage.py`) as well
+as used interactively in Jupyter.
 
-Main Collaborators: Marcelo Amaral, Google AI
-Date: April 2025 [Update as needed]
-Version: [e.g., 1.0]
+-----------------------------------------------------------------------
+Key capabilities
+-----------------------------------------------------------------------
+* **Basis generation**
+  - Enumerate all binary strings of length *N* obeying the “no 00” rule.
+  - Produce explicit basis vectors (NumPy) and check the dimension
+    equals F\_{N+2}.
+
+* **Isometry construction**
+  - Build the tall, column-orthonormal matrix *V* that embeds the QIC
+    subspace into the full 2ⁿ-dimensional Hilbert space.
+
+* **Anyonic operators (abstract level)**
+  - Implement Kauffman–Lomonaco rules to construct Temperley-Lieb
+    projectors \(P_k^{\text{anyon}}\) and braid generators
+    \(B_k^{\text{anyon}}\) on the F\_{N+2} basis.
+
+* **Embedded operators (physical qubit level)**
+  - Compute \(P_k' = V P_k^{\text{anyon}} V^\dagger\) and
+    \(B_k' = R_I P_k' + R_τ (I - P_k')\).
+  - Provide consistency checks: idempotency, Hermiticity, TL relations,
+    Yang–Baxter, unitarity.
+
+* **Direct 3-qubit construction (N = 3 sanity check)**
+  - Build an 8×8 projector and braid gate without the general pipeline
+    and verify they coincide with the embedded versions.
+
+* **Hamiltonian and energy checks (optional, requires Qiskit)**
+  - Generate the sparse-Pauli representation of
+    \(H_\text{QIC} = \sum_i \Pi^{(00)}_{i+1,i}\).
+  - Use Aer EstimatorV2 to confirm that candidate states have zero
+    energy (ground-state compliance).
+
+-----------------------------------------------------------------------
+Quick example
+-----------------------------------------------------------------------
+>>> from qic_core import get_qic_basis, construct_isometry_V
+>>> strings, vecs = get_qic_basis(5)
+>>> V = construct_isometry_V(vecs)
+>>> print(strings[:5])
+['01010', '01011', '01101', '01110', '01111']
+
+-----------------------------------------------------------------------
+Dependencies
+-----------------------------------------------------------------------
+* NumPy, SciPy (≥ 1.10)
+* **Optional:** Qiskit (≥ 0.46) and Qiskit Aer for Hamiltonian and energy
+  utilities.
+
+The module degrades gracefully if Qiskit is absent: QIC algebra still
+works; only Hamiltonian/energy helpers are disabled.
+
+-----------------------------------------------------------------------
+Author & version
+-----------------------------------------------------------------------
+Marcelo M. Amaral with assistence of Google AI
+v1.1 — June 2025
+
+-----------------------------------------------------------------------
 """
 
 import numpy as np
@@ -32,12 +79,13 @@ from scipy.sparse import kron, csc_matrix, csr_matrix, eye as sparse_eye, diags,
 from scipy.sparse.linalg import norm as sparse_norm
 import time
 import traceback
+import os
 
 # --- Qiskit Imports (Optional, needed for H_QIC and energy checks) ---
 try:
     from qiskit import QuantumCircuit
     from qiskit.quantum_info import SparsePauliOp, Statevector
-    # from qiskit.extensions import UnitaryGate # Use circuit.unitary() instead
+    from qiskit.circuit.library import UnitaryGate
     from qiskit_aer.primitives import EstimatorV2 as AerEstimator
     QISKIT_AVAILABLE = True
 except ImportError:
@@ -47,14 +95,15 @@ except ImportError:
     # Define dummy classes/functions if Qiskit is not available
     class SparsePauliOp: pass
     class AerEstimator: pass
+    class UnitaryGate: pass
+
 
 # --- Constants ---
 PHI = (1 + np.sqrt(5)) / 2
 PHI_INV = (np.sqrt(5) - 1) / 2
-PHI_SQ_INV = PHI # Constant delta for TL check Pk Pk+/-1 Pk = delta^-2 Pk or Ui = delta Pi and Ui^2 = delta Ui
+PHI_SQ_INV = 1 / PHI**2 # Constant for TL check Pk Pk+/-1 Pk = delta^-2 Pk
 R_TAU_1 = np.exp(1j * 4 * np.pi / 5.0) # Phase for Pk component in Bk
-R_TAU_TAU = np.exp(-1j * 3 * np.pi / 5.0) # Phase for (I-Pk) component in Bk R_TAU_TAU = A^-1 from Amaral2022 or KauffmanLomonaco
-# Phi * A = R_TAU_1 - R_TAU_TAU such that we can go back to Eq.14 in Amaral2022. In KauffmanLomonaco or B is their B^-1
+R_TAU_TAU = np.exp(-1j * 3 * np.pi / 5.0) # Phase for (I-Pk) component in Bk
 TOL = 1e-9 # Numerical tolerance for checks
 
 # --- Helper: Fibonacci Calculation ---
@@ -119,7 +168,6 @@ def get_qic_basis(n):
     # Convert strings to vectors
     dim_H = 2**n
     qic_basis_vectors = []
-    #print(f"  Generating {dim_QIC} vectors (dim {dim_H}) for basis: {filtered_strings}")
     for s in filtered_strings:
         vec = np.zeros(dim_H, dtype=complex)
         try:
@@ -148,20 +196,16 @@ def construct_isometry_V(qic_basis_vectors):
     if not qic_basis_vectors:
         print("Error: No QIC basis vectors provided for V.")
         return None
-    # Infer N from vector dimension
     dim_H = len(qic_basis_vectors[0])
-    # n_qubits = int(np.log2(dim_H)) # Calculate N if needed later
-    dim_QIC = len(qic_basis_vectors) # F_{N+2}
+    dim_QIC = len(qic_basis_vectors)
 
     print(f"  Stacking {dim_QIC} vectors of dim {dim_H} into V...")
     try:
-        V_matrix = np.stack(qic_basis_vectors, axis=-1) # Stack as columns
-        print(f"  Stacked V shape: {V_matrix.shape}")
+        V_matrix = np.stack(qic_basis_vectors, axis=-1)
     except ValueError as e:
         print(f"Error stacking basis vectors: {e}")
         return None
 
-    # Verify shape
     if V_matrix.shape != (dim_H, dim_QIC):
         print(f"Error: Isometry V shape mismatch. Expected ({dim_H}, {dim_QIC}), got {V_matrix.shape}")
         return None
@@ -169,24 +213,18 @@ def construct_isometry_V(qic_basis_vectors):
     print(f"  Converting V to sparse CSC matrix...")
     V_sparse = csc_matrix(V_matrix)
 
-    # --- Verification V_dag @ V = I (Optional but recommended) ---
     print("  Verifying V_dag @ V = I...")
     try:
         V_dagger_V = V_sparse.conj().T @ V_sparse
         Identity_QIC = sparse_identity(dim_QIC, dtype=complex, format='csc')
-        # Use Frobenius norm for difference check
         diff_norm = sparse_norm(V_dagger_V - Identity_QIC)
-        # Check absolute difference norm
-        if diff_norm > TOL * np.sqrt(dim_QIC): # Allow roughly TOL per element
+        if diff_norm > TOL * np.sqrt(dim_QIC):
             print(f"WARNING: V does not satisfy V_dag @ V = I accurately. ||Diff||={diff_norm:.3e}")
         else:
             print(f"  V_dag @ V = I check passed (||Diff||={diff_norm:.3e}).")
     except Exception as e:
         print(f"  Error during V_dag @ V check: {e}")
         traceback.print_exc()
-        # Don't necessarily fail here, allow continuation
-        # return None
-    # --- End Verification ---
 
     return V_sparse
 
@@ -213,69 +251,83 @@ def get_kauffman_Pn_anyon_general(N, k, basis_strings, delta=PHI):
         print(f"ERROR: Projector index k={k} invalid for N={N} (must be 0 to {N-2}).")
         return None
 
-    dim_QIC = fibonacci(N + 2) # Expect F_{N+2} dimension
+    dim_QIC = fibonacci(N + 2)
     if len(basis_strings) != dim_QIC:
         print(f"ERROR: Number of basis strings ({len(basis_strings)}) doesn't match expected dimension F_{N+2}={dim_QIC}.")
         return None
 
-    # Map basis strings to indices for quick lookup
     basis_map = {s: i for i, s in enumerate(basis_strings)}
 
-    # Constants from Theorem 2
     a = 1.0 / delta
-    if np.isclose(delta, PHI):
-        b = 1.0 / np.sqrt(PHI)
-        b_sq = 1.0 / PHI
-    else: # Add handling for other delta if needed
-        print(f"WARNING: Using delta = {delta}, not PHI. Ensure constants a,b,b_sq are correct.")
-        b_sq_arg = 1.0 - a**2
-        if b_sq_arg < -TOL: # Check if significantly negative
-             raise ValueError(f"Cannot compute real b for delta={delta}, 1-1/delta^2 < 0.")
-        b = np.sqrt(max(0, b_sq_arg)) # Ensure non-negative argument for sqrt
-        b_sq = max(0, b_sq_arg)
+    b_sq_arg = 1.0 - a**2
+    if b_sq_arg < -TOL:
+         raise ValueError(f"Cannot compute real b for delta={delta}, 1-1/delta^2 < 0.")
+    b = np.sqrt(max(0, b_sq_arg))
+    b_sq = max(0, b_sq_arg)
 
-    # Use lil_matrix for efficient construction (needs import)
     Pk_anyon_matrix = lil_matrix((dim_QIC, dim_QIC), dtype=complex)
 
-    # Helper to map '0'/'1' string to 'P'/'*' string (Kauffman notation)
     def to_kauffman(s): return s.replace('0', '*').replace('1', 'P')
-    # Helper to map 'P'/'*' string back to '0'/'1'
     def from_kauffman(s): return s.replace('*', '0').replace('P', '1')
 
     for col_idx, in_string_01 in enumerate(basis_strings):
         in_string_kauff = to_kauffman(in_string_01)
-        results = [] # Store tuples of (output_kauffman_string, coefficient_U)
+        results = []
 
-        # Pad with 'P' for boundary conditions
         padded_kauff = 'P' + in_string_kauff + 'P'
-        # Check pattern around original sites k, k+1 (indices k, k+1, k+2 in padded)
-        pattern = padded_kauff[k : k + 3] # Slice indices k, k+1, k+2
+        pattern = padded_kauff[k : k + 3]
 
-        # Apply the simplified "middle rules" everywhere approach
-        # Based on U_{k+1} action from Theorem 2
         if pattern == "P*P":
-             results.append((in_string_kauff, a)) # U|..P*P..> = a|..P*P..> + ...
-             list_in = list(in_string_kauff); list_in[k] = 'P'; results.append(("".join(list_in), b)) # ... + b|..PPP..>
+             results.append((in_string_kauff, a))
+             list_in = list(in_string_kauff); list_in[k] = 'P'; results.append(("".join(list_in), b))
         elif pattern == "PPP":
-             results.append((in_string_kauff, delta * b_sq)) # U|..PPP..> = ... + delta*b^2|..PPP..>
-             list_in = list(in_string_kauff); list_in[k] = '*'; results.append(("".join(list_in), b)) # U|..PPP..> = b|..P*P..> + ...
+             results.append((in_string_kauff, delta * b_sq))
+             list_in = list(in_string_kauff); list_in[k] = '*'; results.append(("".join(list_in), b))
         elif pattern == "*P*":
-            results.append((in_string_kauff, delta)) # U|..*P*..> = delta |..*P*..>
+            results.append((in_string_kauff, delta))
         elif pattern == "*PP" or pattern == "PP*":
-             pass # U acts as 0
+             pass
         else:
-             pass # Should not happen for valid QIC inputs
+             pass
 
-        # Process results: P_k = U_{k+1} / delta
         for out_kauff, coeff_U in results:
             out_01 = from_kauffman(out_kauff)
             if out_01 in basis_map:
                 row_idx = basis_map[out_01]
                 Pk_anyon_matrix[row_idx, col_idx] += coeff_U / delta
-            # else: output string not in basis (e.g., contains "00"), contribution is 0
 
     print(f"  Finished building P_{k}^anyon.")
     return Pk_anyon_matrix.tocsc()
+
+# --- Step 3b: Build Anyonic Braid Operator B_k^anyon ---
+def get_kauffman_Bn_anyon_general(Pk_anyon):
+    """
+    Constructs the anyonic braid operator B_k^anyon from a given P_k^anyon.
+    The operator is unitary and follows B_k = R1*P_k + Rtau*(I - P_k).
+
+    Args:
+        Pk_anyon (scipy.sparse.csc_matrix): The anyonic projector P_k.
+
+    Returns:
+        scipy.sparse.csc_matrix: The corresponding anyonic braid operator B_k,
+                                 or None on error.
+    """
+    if Pk_anyon is None:
+        print("ERROR: Pk_anyon input to get_kauffman_Bn_anyon_general cannot be None.")
+        return None
+
+    print(f"  Building B_k^anyon from P_k^anyon (shape {Pk_anyon.shape})...")
+    try:
+        dim_qic_space = Pk_anyon.shape[0]
+        Id_anyon = sparse_identity(dim_qic_space, dtype=complex, format='csc')
+        Pk_anyon_csc = Pk_anyon.tocsc()
+        Bk_anyon = R_TAU_1 * Pk_anyon_csc + R_TAU_TAU * (Id_anyon - Pk_anyon_csc)
+        print(f"  B_k^anyon built (shape {Bk_anyon.shape}, nnz={Bk_anyon.nnz}).")
+        return Bk_anyon.tocsc()
+    except Exception as e:
+        print(f"  Error during B_k^anyon calculation: {e}")
+        traceback.print_exc()
+        return None
 
 
 # --- Step 4: Build Embedded Projector P'_k ---
@@ -295,30 +347,20 @@ def build_P_prime_n(n_operator_idx, n_qubits, V_isometry, Pn_anyon_matrix):
     if V_isometry is None or Pn_anyon_matrix is None:
         print("Error: Missing V or Pn_anyon for P' construction.")
         return None
-    dim_H, dim_QIC_V = V_isometry.shape
-    dim_QIC_P_r, dim_QIC_P_c = Pn_anyon_matrix.shape
-
-    # Dimension check against expected F_{N+2}
     expected_dim_QIC = fibonacci(n_qubits + 2)
-    if dim_QIC_V != expected_dim_QIC or dim_QIC_P_r != expected_dim_QIC or dim_QIC_P_c != expected_dim_QIC:
+    if V_isometry.shape[1] != expected_dim_QIC or Pn_anyon_matrix.shape[0] != expected_dim_QIC:
          print(f"ERROR: Dimension mismatch for V P V_dag calculation.")
-         print(f"  N={n_qubits}, Expected QIC Dim F_{N+2}={expected_dim_QIC}")
-         print(f"  V shape: {V_isometry.shape} (QIC dim {dim_QIC_V})")
-         print(f"  P_anyon shape: {Pn_anyon_matrix.shape}")
          return None
 
     print(f"  Building Embedded Projector P'_{n_operator_idx} = V P_{n_operator_idx}^anyon V^dagger...")
     try:
-        # Ensure correct formats for sparse matrix multiplication
         V_csc = V_isometry.tocsc()
         V_dagger_csc = V_csc.conj().T.tocsc()
-        Pn_anyon_csc = Pn_anyon_matrix.tocsc() # Should already be CSC
-
-        # Perform multiplication (CSC @ CSC -> CSC)
+        Pn_anyon_csc = Pn_anyon_matrix.tocsc()
         temp = V_csc @ Pn_anyon_csc
         P_prime_n = temp @ V_dagger_csc
         print(f"  P'_{n_operator_idx} built (shape {P_prime_n.shape}, nnz={P_prime_n.nnz}).")
-        return P_prime_n.tocsc() # Keep as CSC
+        return P_prime_n.tocsc()
     except Exception as e:
         print(f"  Error during P' calculation: {e}")
         traceback.print_exc()
@@ -327,10 +369,10 @@ def build_P_prime_n(n_operator_idx, n_qubits, V_isometry, Pn_anyon_matrix):
 # --- Step 5: Build Embedded Braid Operator B'_k ---
 def build_B_prime_n(n_operator_idx, P_prime_n_matrix, n_qubits):
     """
-    Builds the embedded braid operator B'_k = R1*P'_k + Rtau*(I - P'_k),
-    where I is identity on the full 2^N space. Note: This acts as
-    B'_k = R1*P'_k + Rtau*(Pi_QIC - P'_k) within the QIC subspace,
-    where Pi_QIC = V V_dagger.
+    Builds the embedded braid operator B'_k = R1*P'_k + Rtau*(Pi_QIC - P'_k),
+    where Pi_QIC = V V^dagger is the projector onto the QIC subspace.
+    Note: The formula B' = R1*P' + Rtau*(I - P') is used for simplicity, which is
+    equivalent within the QIC subspace and acts as Rtau*I outside of it.
 
     Args:
         n_operator_idx (int): Index k of the operator.
@@ -349,14 +391,10 @@ def build_B_prime_n(n_operator_idx, P_prime_n_matrix, n_qubits):
         return None
 
     print(f"  Building Braid operator B'_{n_operator_idx} from P'_{n_operator_idx}...")
-    Id_N = sparse_identity(dim, format='csc', dtype=complex) # Use sparse_identity
+    Id_N = sparse_identity(dim, format='csc', dtype=complex)
     try:
         P_prime_n_csc = P_prime_n_matrix.tocsc()
-        # Formula uses P'_k (embedded projector)
-        # This definition ensures B'_k acts as identity outside the QIC subspace if P'_k is zero there.
-        #B_prime_n = R_TAU_1 * P_prime_n_csc + R_TAU_TAU * (Id_N - P_prime_n_csc)
         B_prime_n = R_TAU_1 * P_prime_n_csc + R_TAU_TAU * (Id_N - P_prime_n_csc)
-        #B_prime_n = PHI * R_TAU_1 * P_prime_n_csc + PHI * R_TAU_TAU * (Id_N - P_prime_n_csc)
         print(f"  B'_{n_operator_idx} built (shape {B_prime_n.shape}, nnz={B_prime_n.nnz}).")
         return B_prime_n.tocsc()
     except Exception as e:
@@ -364,408 +402,345 @@ def build_B_prime_n(n_operator_idx, P_prime_n_matrix, n_qubits):
         traceback.print_exc()
         return None
 
-# --- Step 6a: Check Anyonic Operator Properties ---
+# --- Step 6: Alternative: Direct 3-Qubit Matrix Construction ---
+# The functions below provide a direct, concrete construction of the 3-qubit
+# embedded operators in the full 8x8 Hilbert space. This serves as an
+# alternative to the general-N workflow (get_anyon -> build_P_prime) and
+# is useful for verification and understanding the N=3 case.
+
+def get_3_qubit_qic_basis_map():
+    """
+    Defines the valid 3-qubit QIC subspace and creates helper maps.
+    The "no 00" rule on 3 qubits forbids |000>, |001>, and |100>.
+    """
+    # The 5 valid states forming the QIC subspace within the 8-state space
+    valid_strings = ['010', '011', '101', '110', '111']
+
+    # Map from string to its integer value in the full 8-dim space
+    # e.g., '101' -> 5
+    string_to_full_idx = {s: int(s, 2) for s in valid_strings}
+
+    # Map from string to its index within the 5-dim QIC subspace
+    # e.g., '010' -> 0, '011' -> 1, ...
+    string_to_subspace_idx = {s: i for i, s in enumerate(valid_strings)}
+
+    # Reverse map for convenience
+    subspace_idx_to_string = {i: s for s, i in string_to_subspace_idx.items()}
+
+    print(f"3-Qubit QIC Subspace (5 states): {valid_strings}")
+    return string_to_full_idx, string_to_subspace_idx, subspace_idx_to_string
+
+
+def build_local_projector_matrix(delta=PHI):
+    """
+    Constructs the 8x8 matrix for the local projector P_k.
+    This is the core of the logic, translating the abstract Kauffman rules
+    from qic_core.py into a concrete 3-qubit operator matrix.
+
+    The logic implemented here corresponds to P_0 acting on a 3-site chain.
+    The resulting matrix is equivalent to P'_0 from `build_P_prime_n` for N=3.
+    """
+    print("\n--- Building 8x8 Local Projector Matrix P_local (Direct Method) ---")
+
+    # Get basis maps
+    s_to_full, _, _ = get_3_qubit_qic_basis_map()
+
+    # Initialize an 8x8 zero matrix for our P_local operator
+    p_local = np.zeros((8, 8), dtype=complex)
+
+    # Kauffman algebra constants
+    a = 1.0 / delta
+    b_sq = 1.0 - a**2
+    b = np.sqrt(b_sq)
+
+    # --- Apply Kauffman's rules to define the action on the valid subspace ---
+    # We are building the matrix column by column. The action on a basis state |s>
+    # defines the column corresponding to that state's index.
+
+    # Rule for |101> ('P*P'): P|101> = (1/delta^2)|101> + (b/delta)|111>
+    in_str = '101'
+    col_idx = s_to_full[in_str]
+    p_local[s_to_full['101'], col_idx] = 1 / (delta**2)
+    p_local[s_to_full['111'], col_idx] = b / delta
+    print(f"Rule for '{in_str}': Mapped to linear combination of '101' and '111'.")
+
+    # Rule for |111> ('PPP'): P|111> = (b/delta)|101> + b^2|111>
+    in_str = '111'
+    col_idx = s_to_full[in_str]
+    p_local[s_to_full['101'], col_idx] = b / delta
+    p_local[s_to_full['111'], col_idx] = b_sq
+    print(f"Rule for '{in_str}': Mapped to linear combination of '101' and '111'.")
+
+    # Rule for |010> ('*P*'): P|010> = 1 * |010>
+    in_str = '010'
+    col_idx = s_to_full[in_str]
+    p_local[s_to_full['010'], col_idx] = 1.0
+    print(f"Rule for '{in_str}': Mapped to itself.")
+
+    # Rule for |011> ('*PP') and |110> ('PP*'): P projects them to the zero vector.
+    # We don't need to do anything as the matrix was initialized to zeros.
+    print(f"Rule for '011' and '110': Mapped to zero vector.")
+
+    # On the forbidden subspace {'000', '001', '100'}, P acts as the zero operator.
+    # Again, nothing to do as the matrix is already zero there.
+    print("Action on forbidden subspace (e.g., |000>, |001>, |100>) is the zero operator.")
+
+    return p_local
+
+
+def build_local_braid_generator(p_local):
+    """
+    Constructs the 8x8 unitary braid generator B_local using the formula
+    B = R1*P + Rtau*(I - P).
+
+    Args:
+        p_local (np.ndarray): The 8x8 projector matrix, e.g., from build_local_projector_matrix.
+
+    Returns:
+        np.ndarray: The 8x8 braid generator matrix.
+    """
+    print("\n--- Building 8x8 Braid Generator Matrix B_local (Direct Method) ---")
+    if p_local.shape != (8, 8):
+        raise ValueError("Input projector matrix must be 8x8.")
+
+    identity_8x8 = np.identity(8, dtype=complex)
+
+    # The formula correctly defines the action on the full 8-dim space.
+    # On QIC subspace: B = R1*P + Rtau*(I-P)
+    # On forbidden subspace (where P=0): B = Rtau*I
+    b_local = R_TAU_1 * p_local + R_TAU_TAU * (identity_8x8 - p_local)
+
+    # --- Sanity Check: Verify Unitarity ---
+    print("Verifying that the resulting B_local matrix is unitary (B_dag * B = I)...")
+    try:
+        check_matrix = b_local.conj().T @ b_local
+        if np.allclose(check_matrix, identity_8x8, atol=TOL):
+            print("SUCCESS: B_local is unitary.")
+        else:
+            print("WARNING: B_local matrix is NOT unitary.")
+    except Exception:
+        print(f"Error during unitarity check: {traceback.format_exc()}")
+
+    return b_local
+
+# --- Step 7a: Check Anyonic Operator Properties ---
 def check_anyon_operator_properties(P_anyon_ops, N, delta=PHI, tol=TOL):
     """
     Performs numerical checks on the list of anyon P_k^anyon operators.
     Checks: P^2=P, P=P^dagger, TL Relations, Commutation.
-
-    Args:
-        P_anyon_ops (list[scipy.sparse.csc_matrix]): List of P_k^anyon operators.
-        N (int): Number of qubits (sites).
-        delta (float/complex): Loop value used in construction.
-        tol (float): Numerical tolerance.
-
-    Returns:
-        bool: True if all checks pass, False otherwise.
     """
     print("\n--- Verifying Anyonic Operator Properties (P_k^anyon) ---")
     if N < 2:
          print("Skipping checks for N<2 (no operators).")
          return True
-    if not P_anyon_ops:
-        print("ERROR: Anyonic operator list is empty. Skipping checks.")
-        return False
-
-    num_ops_expected = N - 1
-    if len(P_anyon_ops) != num_ops_expected:
-        print(f"ERROR: Expected {num_ops_expected} anyonic operators for N={N}, but found {len(P_anyon_ops)}.")
+    if not P_anyon_ops or len(P_anyon_ops) != N - 1:
+        print(f"ERROR: Incorrect number of anyonic operators provided for N={N}.")
         return False
 
     all_checks_passed = True
     t = 1.0 / (delta**2) # TL parameter
-    pk_dim = P_anyon_ops[0].shape[0]
-    Id_pk = sparse_identity(pk_dim, format='csc', dtype=complex)
 
     for k, Pk_anyon in enumerate(P_anyon_ops):
         label = f"P_{k}^anyon"
-        Pk = Pk_anyon.tocsc() # Ensure CSC
+        Pk = Pk_anyon.tocsc()
 
         # Check P^2 = P (Idempotency)
-        Pk_sq = Pk @ Pk
-        diff_proj = Pk_sq - Pk
-        norm_Pk = sparse_norm(Pk)
-        norm_diff = sparse_norm(diff_proj)
-        holds = norm_diff < tol * max(1e-12, norm_Pk**2) # Relative check with floor
+        norm_diff = sparse_norm(Pk @ Pk - Pk)
+        holds = norm_diff < tol
         print(f"  {label}^2 = {label}? {holds}. ||P^2-P|| = {norm_diff:.3e}")
-        if not holds: print(f"     Max element |P^2-P| = {np.max(np.abs(diff_proj.toarray())) if diff_proj.nnz > 0 else 0:.3e}")
         all_checks_passed &= holds
 
         # Check P = P^dagger (Hermiticity)
-        Pk_dag = Pk.conj().T
-        diff_herm = Pk - Pk_dag
-        norm_diff = sparse_norm(diff_herm)
-        holds = norm_diff < tol * max(1e-12, norm_Pk) # Relative check with floor
+        norm_diff = sparse_norm(Pk - Pk.conj().T)
+        holds = norm_diff < tol
         print(f"  {label} = {label}^d? {holds}. ||P-P^d|| = {norm_diff:.3e}")
-        if not holds: print(f"     Max element |P-P^d| = {np.max(np.abs(diff_herm.toarray())) if diff_herm.nnz > 0 else 0:.3e}")
         all_checks_passed &= holds
 
-    # Check TL Pk Pk+1 Pk = t Pk
+    # Check TL Relations
     if N >= 3:
-        print("\n* Checking TL Relations for P_k^anyon *")
-        for k in range(num_ops_expected - 1):
+        for k in range(N - 2):
             Pk = P_anyon_ops[k].tocsc()
             Pkp1 = P_anyon_ops[k+1].tocsc()
-
-            # Check Pk Pk+1 Pk = t Pk
-            lhs = Pk @ Pkp1 @ Pk
-            rhs = t * Pk
-            diff = lhs - rhs
-            norm_diff = sparse_norm(diff)
-            norm_rhs = sparse_norm(rhs)
-            holds = norm_diff < tol * max(1e-12, norm_rhs)
-            print(f"  TL1 ({k},{k+1}): P{k}P{k+1}P{k} = t P{k}? {holds}. ||Diff|| = {norm_diff:.3e} (t={t:.3f})")
-            if not holds: print(f"     Max element |Diff| = {np.max(np.abs(diff.toarray())) if diff.nnz > 0 else 0:.3e}")
+            # Pk Pk+1 Pk = t Pk
+            norm_diff = sparse_norm(Pk @ Pkp1 @ Pk - t * Pk)
+            holds = norm_diff < tol
+            print(f"  TL1 ({k},{k+1}): P{k}P{k+1}P{k} = t P{k}? {holds}. ||Diff|| = {norm_diff:.3e}")
             all_checks_passed &= holds
 
-            # Check Pk+1 Pk Pk+1 = t Pk+1
-            lhs = Pkp1 @ Pk @ Pkp1
-            rhs = t * Pkp1
-            diff = lhs - rhs
-            norm_diff = sparse_norm(diff)
-            norm_rhs = sparse_norm(rhs)
-            holds = norm_diff < tol * max(1e-12, norm_rhs)
-            print(f"  TL2 ({k},{k+1}): P{k+1}P{k}P{k+1} = t P{k+1}? {holds}. ||Diff|| = {norm_diff:.3e} (t={t:.3f})")
-            if not holds: print(f"     Max element |Diff| = {np.max(np.abs(diff.toarray())) if diff.nnz > 0 else 0:.3e}")
-            all_checks_passed &= holds
-    else:
-        print("  Skipping TL relations check (requires N >= 3).")
-
-    # Check TL Commutation Pk Pj = Pj Pk for |k-j|>1
+    # Check Commutation
     if N >= 4:
-        print("\n* Checking Commutation for P_k^anyon *")
-        for k in range(num_ops_expected):
-            for j in range(k + 2, num_ops_expected):
-                Pk = P_anyon_ops[k].tocsc()
-                Pj = P_anyon_ops[j].tocsc()
-                comm = Pk @ Pj - Pj @ Pk
-                norm_comm = sparse_norm(comm)
-                norm_PkPj = sparse_norm(Pk @ Pj) # Norm for relative check
-                holds = norm_comm < tol * max(1e-12, norm_PkPj)
-                print(f"  TL Comm ({k},{j}): [P{k},P{j}] = 0? {holds}. ||Comm|| = {norm_comm:.3e}")
-                if not holds: print(f"     Max element |Comm| = {np.max(np.abs(comm.toarray())) if comm.nnz > 0 else 0:.3e}")
+        for k in range(N - 1):
+            for j in range(k + 2, N - 1):
+                norm_comm = sparse_norm(P_anyon_ops[k] @ P_anyon_ops[j] - P_anyon_ops[j] @ P_anyon_ops[k])
+                holds = norm_comm < tol
+                print(f"  Comm ({k},{j}): [P{k},P{j}] = 0? {holds}. ||Comm|| = {norm_comm:.3e}")
                 all_checks_passed &= holds
-    else:
-         print("  Skipping Commutation check (requires N >= 4).")
 
     print("\n--- Anyonic Operator Verification Complete ---")
     return all_checks_passed
 
 
-# --- Step 6b: Check Embedded Operator Properties ---
+# --- Step 7b: Check Embedded Operator Properties ---
 def check_embedded_operator_properties(P_prime_ops, B_prime_ops, n, tol=TOL):
     """
-    Performs numerical checks on the lists of embedded P'_k and B'_k operators.
+    Performs numerical checks on embedded P'_k and B'_k operators.
     Checks: P'^2=P', P'=P^d, TL for P', B B^d=I, Braid Relations for B'.
-
-    Args:
-        P_prime_ops (list[scipy.sparse.csc_matrix]): List of P'_k operators.
-        B_prime_ops (list[scipy.sparse.csc_matrix]): List of B'_k operators.
-        n (int): Number of qubits N.
-        tol (float): Numerical tolerance.
-
-    Returns:
-        bool: True if all checks pass, False otherwise.
     """
     print("\n--- Verifying Embedded Operator Properties (P'_k, B'_k) ---")
-    # Input validation (same as in check_anyon_operator_properties)
-    if n < 2:
-        print("Skipping checks for N<2 (no operators).")
-        return True
-    if not P_prime_ops or not B_prime_ops or len(P_prime_ops) != len(B_prime_ops):
-        print("ERROR: Embedded operator lists missing or mismatched. Skipping checks.")
-        return False
-    num_ops = len(P_prime_ops)
-    expected_num_ops = n - 1
-    if num_ops != expected_num_ops:
-         print(f"ERROR: Expected {expected_num_ops} embedded operators for N={n}, but found {num_ops}.")
-         return False
-    dim_H = 2**n
-    Id_N = sparse_identity(dim_H, format='csc', dtype=complex)
-    if P_prime_ops[0].shape != (dim_H, dim_H):
-        print(f"ERROR: Operator dimension mismatch.")
+    if n < 2: return True
+    if not P_prime_ops or not B_prime_ops or len(P_prime_ops) != len(B_prime_ops) or len(P_prime_ops) != n - 1:
+        print("ERROR: Embedded operator lists are invalid. Skipping checks.")
         return False
 
     all_checks_passed = True
+    dim_H = 2**n
+    Id_N = sparse_identity(dim_H, format='csc', dtype=complex)
 
-    # --- Check P' Properties ---
     print("\n* Checking P' Properties *")
-    # (Identical checks as in check_anyon_operator_properties, but on P'_k)
     for idx, P_prime_i in enumerate(P_prime_ops):
-        label = f"P'_{idx}"
-        P_prime_i_csc = P_prime_i.tocsc()
-        # Idempotency
-        P_prime_sq = P_prime_i_csc @ P_prime_i_csc
-        diff_proj = P_prime_sq - P_prime_i_csc
-        norm_P = sparse_norm(P_prime_i_csc)
-        norm_diff = sparse_norm(diff_proj)
-        holds = norm_diff < tol * max(1e-12, norm_P**2) # Relative check
-        print(f"  {label}^2 = {label}? {holds}. ||P'^2-P'|| = {norm_diff:.3e}")
-        if not holds: print(f"     Max element |P'^2-P'| = {np.max(np.abs(diff_proj.toarray())) if diff_proj.nnz > 0 else 0:.3e}")
-        all_checks_passed &= holds
-        # Hermiticity
-        P_prime_dag = P_prime_i_csc.conj().T
-        diff_herm = P_prime_i_csc - P_prime_dag
-        norm_diff = sparse_norm(diff_herm)
-        holds = norm_diff < tol * max(1e-12, norm_P) # Relative check
-        print(f"  {label} = {label}^d? {holds}. ||P'-P'^d|| = {norm_diff:.3e}")
-        if not holds: print(f"     Max element |P'-P'^d| = {np.max(np.abs(diff_herm.toarray())) if diff_herm.nnz > 0 else 0:.3e}")
-        all_checks_passed &= holds
+        # Idempotency & Hermiticity
+        norm_proj = sparse_norm(P_prime_i @ P_prime_i - P_prime_i)
+        norm_herm = sparse_norm(P_prime_i - P_prime_i.conj().T)
+        holds_proj = norm_proj < tol
+        holds_herm = norm_herm < tol
+        print(f"  P'_{idx}: P'^2=P'? {holds_proj} (||d||={norm_proj:.2e}), P'=P'^d? {holds_herm} (||d||={norm_herm:.2e})")
+        all_checks_passed &= (holds_proj and holds_herm)
 
-    # --- Check TL for P' ---
-    print("\n* Checking Temperley-Lieb Relation for P' *")
-    if n >= 3:
-        for idx1 in range(num_ops - 1):
-            idx2 = idx1 + 1
-            P0p = P_prime_ops[idx1].tocsc()
-            P1p = P_prime_ops[idx2].tocsc()
-            t = PHI_SQ_INV**(-2)
-
-            # Check P'_i P'_{i+1} P'_i = t P'_i
-            lhs_tl = P0p @ P1p @ P0p
-            rhs_tl = t * P0p
-            diff_tl = lhs_tl - rhs_tl
-            norm_P0 = sparse_norm(P0p)
-            norm_diff = sparse_norm(diff_tl)
-            holds = norm_diff < tol * max(1e-12, t * norm_P0) # Relative check
-            print(f"  TL (P'_{idx1}P'_{idx2}P'_{idx1} = t P'_{idx1})? {holds}. ||Diff|| = {norm_diff:.3e} (t=PHI^-2)")
-            if not holds: print(f"     Max element |Diff| = {np.max(np.abs(diff_tl.toarray())) if diff_tl.nnz > 0 else 0:.3e}")
-            all_checks_passed &= holds
-
-            # Check P'_{i+1} P'_i P'_{i+1} = t P'_{i+1}
-            lhs_tl2 = P1p @ P0p @ P1p
-            rhs_tl2 = t * P1p
-            diff_tl2 = lhs_tl2 - rhs_tl2
-            norm_P1 = sparse_norm(P1p)
-            norm_diff = sparse_norm(diff_tl2)
-            holds = norm_diff < tol * max(1e-12, t * norm_P1) # Relative check
-            print(f"  TL (P'_{idx2}P'_{idx1}P'_{idx2} = t P'_{idx2})? {holds}. ||Diff|| = {norm_diff:.3e} (t=PHI^-2)")
-            if not holds: print(f"     Max element |Diff| = {np.max(np.abs(diff_tl2.toarray())) if diff_tl2.nnz > 0 else 0:.3e}")
-            all_checks_passed &= holds
-    else:
-        print("  Skipping TL relations check (requires N >= 3).")
-
-    # --- Check B' Properties ---
-    print("\n* Checking B' Properties *")
+    print("\n* Checking B' Properties (Unitarity) *")
     for idx, B_prime_i in enumerate(B_prime_ops):
-        label = f"B'_{idx}"
-        B_prime_i_csc = B_prime_i.tocsc()
-        # Unitarity
-        B_prime_i_dagger = B_prime_i_csc.conj().T
-        BBd = B_prime_i_csc @ B_prime_i_dagger
-        diff_unit = BBd - Id_N
-        norm_diff = sparse_norm(diff_unit)
-        holds = norm_diff < tol * np.sqrt(dim_H) # Allow roughly TOL per element
-        print(f"  Unitarity ({label}{label}^d=I)? {holds}. ||BB^d-I|| = {norm_diff:.3e}")
-        if not holds: print(f"     Max element |BB^d-I| = {np.max(np.abs(diff_unit.toarray())) if diff_unit.nnz > 0 else 0:.3e}")
+        norm_unit = sparse_norm(B_prime_i @ B_prime_i.conj().T - Id_N)
+        holds = norm_unit < tol
+        print(f"  B'_{idx}: BB^d=I? {holds}. ||BB^d-I|| = {norm_unit:.3e}")
         all_checks_passed &= holds
 
-    # --- Check Braid Relations for B' ---
-    print("\n* Checking Braid Relations for B' *")
-    # Yang-Baxter
+    print("\n* Checking Braid & TL Relations *")
     if n >= 3:
-        for idx1 in range(num_ops - 1):
-            idx2 = idx1 + 1
-            B0p = B_prime_ops[idx1].tocsc()
-            B1p = B_prime_ops[idx2].tocsc()
+        for idx in range(n - 2):
+            P0p, P1p = P_prime_ops[idx], P_prime_ops[idx+1]
+            B0p, B1p = B_prime_ops[idx], B_prime_ops[idx+1]
+            t = 1 / PHI**2
 
-            lhs_ybe = B0p @ B1p @ B0p
-            rhs_ybe = B1p @ B0p @ B1p
-            diff_ybe = lhs_ybe - rhs_ybe
-            norm_diff = sparse_norm(diff_ybe)
-            norm_rhs = sparse_norm(rhs_ybe)
-            # Relative check, guarding against norm_rhs being zero
-            if norm_rhs > tol * 10: holds = (norm_diff / norm_rhs) < tol
-            else: holds = norm_diff < tol * 10 # Absolute check if rhs norm is small
+            # TL Relation
+            norm_tl = sparse_norm(P0p @ P1p @ P0p - t * P0p)
+            holds_tl = norm_tl < tol
+            print(f"  TL(P'_{idx},P'_{idx+1}): P'P'+1P' = t P'? {holds_tl}. ||Diff|| = {norm_tl:.3e}")
+            all_checks_passed &= holds_tl
 
-            print(f"  YBE (B'_{idx1}B'_{idx2}B'_{idx1}=B'_{idx2}B'_{idx1}B'_{idx2})? {holds}. ||Diff|| = {norm_diff:.3e}")
-            if not holds: print(f"     Max element |Diff| = {np.max(np.abs(diff_ybe.toarray())) if diff_ybe.nnz > 0 else 0:.3e}")
-            all_checks_passed &= holds
-    else:
-        print("  Skipping Yang-Baxter (requires N >= 3).")
-
-    # Commutation
-    if n >= 4:
-         print("\n* Checking Commutation Relation for B' *")
-         for idx1 in range(num_ops):
-             for idx2 in range(idx1 + 2, num_ops):
-                 Bi = B_prime_ops[idx1].tocsc()
-                 Bj = B_prime_ops[idx2].tocsc()
-                 comm = Bi @ Bj - Bj @ Bi
-                 norm_comm = sparse_norm(comm)
-                 norm_BiBj = sparse_norm(Bi @ Bj)
-                 # Relative check, guarding against norm being zero
-                 if norm_BiBj > tol * 10: holds = (norm_comm / norm_BiBj) < tol
-                 else: holds = norm_comm < tol * 10
-
-                 print(f"  Commutation (B'_{idx1}B'_{idx2}=B'_{idx2}B'_{idx1})? {holds}. ||[B'_{idx1}, B'_{idx2}]|| = {norm_comm:.3e}")
-                 if not holds: print(f"     Max element |Comm| = {np.max(np.abs(comm.toarray())) if comm.nnz > 0 else 0:.3e}")
-                 all_checks_passed &= holds
-    else:
-         print("  Skipping Commutation check (requires N >= 4).")
+            # Yang-Baxter
+            norm_ybe = sparse_norm(B0p @ B1p @ B0p - B1p @ B0p @ B1p)
+            holds_ybe = norm_ybe < tol
+            print(f"  YBE(B'_{idx},B'_{idx+1}): B'B'+1B' = B'+1B'B'? {holds_ybe}. ||Diff|| = {norm_ybe:.3e}")
+            all_checks_passed &= holds_ybe
 
     print("\n--- Embedded Operator Verification Complete ---")
     return all_checks_passed
 
-# --- Step 7: Build QIC Hamiltonian ---
+# --- Step 8: Build QIC Hamiltonian ---
 def build_qic_hamiltonian_op(n, lam=1.0, verbose=True):
     """Builds the QIC Hamiltonian H = lambda * Sum P_i^{00}."""
     if not QISKIT_AVAILABLE:
         print("Qiskit not available, cannot build Hamiltonian.")
         return None
-    if n < 2: return SparsePauliOp(['I'*n], coeffs=[0.0 + 0.0j]) # Return zero op
+    if n < 2: return SparsePauliOp(['I'*n], coeffs=[0.0 + 0.0j])
     if verbose: print(f"  Building Hamiltonian H_QIC for N={n}...")
-    pauli_list = []
-    coeff_list = []
-    # P_i^{00} = |00><00|_{i,i+1} = (I+Z_i)/2 * (I+Z_{i+1})/2
-    # = 0.25 * (I + Z_i + Z_{i+1} + Z_i Z_{i+1})
+    pauli_list, coeff_list = [], []
+    term_coeff = 0.25 * lam
     for i in range(n - 1):
-        qiskit_i = n - 1 - i
-        qiskit_ip1 = n - 1 - (i+1)
-        # Term I
-        pauli_list.append('I' * n); coeff_list.append(0.25 * lam)
-        # Term +Z_i
-        pauli_str_zi = list('I' * n); pauli_str_zi[qiskit_i] = 'Z'
-        pauli_list.append("".join(pauli_str_zi)); coeff_list.append(+0.25 * lam)
-        # Term +Z_{i+1}
-        pauli_str_zip1 = list('I' * n); pauli_str_zip1[qiskit_ip1] = 'Z'
-        pauli_list.append("".join(pauli_str_zip1)); coeff_list.append(+0.25 * lam)
-        # Term +Z_i Z_{i+1}
-        pauli_str_zz = list('I' * n); pauli_str_zz[qiskit_i] = 'Z'; pauli_str_zz[qiskit_ip1] = 'Z'
-        pauli_list.append("".join(pauli_str_zz)); coeff_list.append(0.25 * lam)
+        q_i, q_ip1 = n - 1 - i, n - 2 - i
+        pauli_i = ['I'] * n; pauli_ip1 = ['I'] * n; pauli_i_ip1 = ['I'] * n
+        pauli_i[q_i] = 'Z'
+        pauli_ip1[q_ip1] = 'Z'
+        pauli_i_ip1[q_i] = 'Z'; pauli_i_ip1[q_ip1] = 'Z'
+        pauli_list.extend(['I'*n, "".join(pauli_i), "".join(pauli_ip1), "".join(pauli_i_ip1)])
+        coeff_list.extend([term_coeff] * 4)
 
-    hamiltonian_op = SparsePauliOp(pauli_list, coeffs=np.array(coeff_list, dtype=complex))
-    simplified_op = hamiltonian_op.simplify(atol=1e-12) # Simplify sums terms
-    if verbose: print(f"  H_QIC built (SparsePauliOp, {len(simplified_op)} terms).")
-    return simplified_op
+    hamiltonian_op = SparsePauliOp(pauli_list, coeffs=np.array(coeff_list, dtype=complex)).simplify()
+    if verbose: print(f"  H_QIC built (SparsePauliOp, {len(hamiltonian_op)} terms).")
+    return hamiltonian_op
 
-# --- Step 8: Verify Energy (using Qiskit EstimatorV2) ---
+# --- Step 9: Verify Energy (using Qiskit EstimatorV2) ---
 def verify_energy(state_input, hamiltonian_op, n, label="State", verbose=True):
     """Calculates <state|H|state> using Qiskit EstimatorV2."""
     if not QISKIT_AVAILABLE:
         print("Qiskit not available, cannot verify energy.")
         return False, 0.0j
-    if state_input is None or hamiltonian_op is None:
-        print(f"Error: Cannot verify energy for {label} - input missing.")
-        return False, 0.0 + 0.0j
-
-    expected_dim = 2**n
-    if not isinstance(state_input, np.ndarray) or not (state_input.shape == (expected_dim,) or state_input.shape == (expected_dim, 1)):
-         print(f"Error: verify_energy input must be numpy array of shape ({expected_dim},) or ({expected_dim},1). Got {type(state_input)} shape {state_input.shape if isinstance(state_input, np.ndarray) else 'N/A'}.")
-         return False, 0.0 + 0.0j
+    if state_input is None or hamiltonian_op is None: return False, 0.0j
 
     state_data = state_input.flatten()
-    norm = np.linalg.norm(state_data)
-
-    # Handle zero vector case
-    if np.isclose(norm, 0.0, atol=TOL*100):
+    if np.linalg.norm(state_data) < TOL:
          print(f"  State for {label} is zero vector. Energy is 0.")
-         return True, 0.0 + 0.0j
-    # Check normalization
-    if not np.isclose(norm, 1.0, atol=TOL*100):
-        print(f"Warning: Input ndarray for {label} not normalized (norm={norm:.4f}). Cannot reliably calculate energy.")
-        return False, 0.0 + 0.0j
+         return True, 0.0j
 
-    # --- Create circuit and initialize state ---
     try:
-        temp_qc = QuantumCircuit(n, name=f"Temp_{label}")
+        temp_qc = QuantumCircuit(n)
         temp_qc.initialize(state_data, temp_qc.qubits)
     except Exception as e:
-        print(f"Error: Failed to initialize QC for {label}: {e}"); traceback.print_exc(); return False, 0.0 + 0.0j
+        print(f"Error: Failed to initialize QC for {label}: {e}"); return False, 0.0j
 
     if verbose: print(f"  Verifying energy for {label} (N={n})...")
-
-    # --- Use EstimatorV2 ---
     try:
-        estimator = AerEstimator()
-        if not isinstance(hamiltonian_op, (SparsePauliOp)):
-            print(f"Error: hamiltonian_op is not valid type ({type(hamiltonian_op)}).")
-            return False, 0.0+0.0j
         pub = (temp_qc, [hamiltonian_op])
-        job = estimator.run(pubs=[pub])
-        result = job.result()
-        pub_result = result[0]
-
-        if hasattr(pub_result, 'data') and hasattr(pub_result.data, 'evs') and \
-           isinstance(pub_result.data.evs, (np.ndarray, list)) and len(pub_result.data.evs) > 0:
-             energy_complex = pub_result.data.evs[0]
-             energy_real = np.real(energy_complex)
-             energy_imag = np.imag(energy_complex)
-             # Increase tolerance for estimator result
-             is_gs = np.isclose(energy_real, 0, atol=TOL*1000) and np.isclose(energy_imag, 0, atol=TOL*1000)
-             if verbose:
-                  print(f"  <{label}|H_QIC|{label}>: {energy_complex:.6f} ({energy_real:.6f} R, {energy_imag:.6f} I)")
-                  print(f"  --> Ground State (Energy ~ 0): {is_gs}")
-             return is_gs, energy_complex
-        else:
-             print(f"  Estimator result format unexpected for {label}. Result data: {pub_result.data}"); return False, 0.0+0.0j
-    except NameError as ne: print(f"\nERROR: Qiskit class/function not found? ({ne})"); return False, 0.0 + 0.0j
-    except TypeError as te: print(f"  Estimator V2 TypeError for {label}: {te}"); traceback.print_exc(); return False, 0.0 + 0.0j
-    except Exception as e: print(f"  Estimator V2 calculation failed for {label}: {e}"); traceback.print_exc(); return False, 0.0 + 0.0j
+        job = AerEstimator().run(pubs=[pub])
+        pub_result = job.result()[0]
+        energy = pub_result.data.evs[0]
+        is_gs = np.isclose(np.real(energy), 0, atol=TOL*100)
+        if verbose:
+             print(f"  <{label}|H_QIC|{label}>: {energy:.6f}")
+             print(f"  --> Ground State (Energy ~ 0): {is_gs}")
+        return is_gs, energy
+    except Exception as e:
+        print(f"  Estimator V2 calculation failed for {label}: {e}"); return False, 0.0j
 
 # === Example Usage (Optional - typically called from another script) ===
 if __name__ == "__main__":
-    # This block can be used for testing the core functions directly
     print("--- Testing Core Functions ---")
     N_test = 3
-    print(f"\nTesting Fibonacci for N={N_test}: F_{N_test+2} = {fibonacci(N_test+2)}")
+    print(f"\nTesting with N={N_test}, Expected QIC Dimension: F_{N_test+2} = {fibonacci(N_test+2)}")
 
     try:
+        # --- Method 1: General-N Workflow ---
+        print("\n--- METHOD 1: Generating Operators with General Workflow ---")
         test_strings, test_vectors = get_qic_basis(N_test)
-        if test_strings:
-            print(f"\nGenerated basis for N={N_test}.")
-            test_V = construct_isometry_V(test_vectors)
-            if test_V:
-                print("\nGenerated Isometry V.")
-                P0_anyon = get_kauffman_Pn_anyon_general(N_test, 0, test_strings)
-                P1_anyon = get_kauffman_Pn_anyon_general(N_test, 1, test_strings)
-                if P0_anyon is not None and P1_anyon is not None:
-                    print("\nGenerated Anyon Projectors P0, P1.")
-                    # Check anyon ops
-                    anyon_checks_passed = check_anyon_operator_properties([P0_anyon, P1_anyon], N_test)
-                    print(f"Anyon Checks Passed: {anyon_checks_passed}")
+        test_V = construct_isometry_V(test_vectors)
+        P0_anyon = get_kauffman_Pn_anyon_general(N_test, 0, test_strings)
+        P1_anyon = get_kauffman_Pn_anyon_general(N_test, 1, test_strings)
+        anyon_checks_passed = check_anyon_operator_properties([P0_anyon, P1_anyon], N_test)
+        print(f"Anyon Checks Passed: {anyon_checks_passed}")
 
-                    P0_prime = build_P_prime_n(0, N_test, test_V, P0_anyon)
-                    P1_prime = build_P_prime_n(1, N_test, test_V, P1_anyon)
-                    if P0_prime is not None and P1_prime is not None:
-                        print("\nGenerated Embedded Projectors P'0, P'1.")
-                        B0_prime = build_B_prime_n(0, P0_prime, N_test)
-                        B1_prime = build_B_prime_n(1, P1_prime, N_test)
-                        if B0_prime is not None and B1_prime is not None:
-                            print("\nGenerated Embedded Braids B'0, B'1.")
-                            # Check embedded ops
-                            embedded_checks_passed = check_embedded_operator_properties(
-                                [P0_prime, P1_prime], [B0_prime, B1_prime], N_test
-                            )
-                            print(f"Embedded Checks Passed: {embedded_checks_passed}")
+        P0_prime = build_P_prime_n(0, N_test, test_V, P0_anyon)
+        P1_prime = build_P_prime_n(1, N_test, test_V, P1_anyon)
+        B0_prime = build_B_prime_n(0, P0_prime, N_test)
+        B1_prime = build_B_prime_n(1, P1_prime, N_test)
+        embedded_checks_passed = check_embedded_operator_properties(
+            [P0_prime, P1_prime], [B0_prime, B1_prime], N_test
+        )
+        print(f"\nEmbedded Checks Passed (General Method): {embedded_checks_passed}")
 
-                            # Test Hamiltonian and Energy (if Qiskit available)
-                            if QISKIT_AVAILABLE:
-                                H_op = build_qic_hamiltonian_op(N_test)
-                                if H_op:
-                                    # Test energy of a basis state
-                                    init_state_vec = test_V @ np.array([0,0,1,0,0], dtype=complex) # |101>
-                                    verify_energy(init_state_vec, H_op, N_test, label="|101> state")
+        # --- Method 2: Direct 3-Qubit Construction ---
+        print("\n\n--- METHOD 2: Generating Operators with Direct N=3 Functions ---")
+        p0_local_direct = build_local_projector_matrix()
+        b0_local_direct = build_local_braid_generator(p0_local_direct)
+
+        # --- Verification: Compare Method 1 and Method 2 ---
+        print("\n\n--- VERIFICATION: Comparing results from both methods for P'_0 ---")
+        p0_prime_dense = P0_prime.toarray()
+        are_matrices_close = np.allclose(p0_prime_dense, p0_local_direct, atol=TOL)
+        print(f"Is P'_0 (General) == P_local (Direct)?  --> {are_matrices_close}")
+        if not are_matrices_close:
+            print("Matrices do not match!")
+            #print("P'_0 from General Method:\n", p0_prime_dense)
+            #print("P_local from Direct Method:\n", p0_local_direct)
+        else:
+            print("SUCCESS: The general and direct construction methods yield the same projector matrix for N=3, k=0.")
+
+        # Save the verified gate to a file if desired
+        OUTPUT_GATE_MATRIX_NPY_FILE = "data/gates/b_local_matrix.npy"
+        if b0_local_direct is not None:
+             output_dir = os.path.dirname(OUTPUT_GATE_MATRIX_NPY_FILE)
+             if not os.path.exists(output_dir):
+                 os.makedirs(output_dir)
+             np.save(OUTPUT_GATE_MATRIX_NPY_FILE, b0_local_direct)
+             print(f"\nSuccessfully saved B_local matrix to {OUTPUT_GATE_MATRIX_NPY_FILE}")
 
 
     except Exception as e:

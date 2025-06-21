@@ -26,7 +26,7 @@ else:
 # === Configuration ===
 N = 3 # Fixed N=3
 # --- IBM Backend Selection ---
-# Option 1: Specify a known backend name (e.g., an Eagle R3 processor)
+# Option 1: Specify a known backend name
 # backend_name = "ibm_brisbane"
 # Option 2: Find the least busy operational backend (ensure it has >= N qubits)
 backend_name = None # Set to None to use least_busy

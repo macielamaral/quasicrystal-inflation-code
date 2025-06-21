@@ -10,16 +10,10 @@ import os
 
 # Import functions from the core library module
 try:
-    # Assuming qic_core.py is in src directory and src is in PYTHONPATH
-    # or you've used the sys.path.insert(0, src_path) method
     import qic_core 
 except ImportError:
-    # Attempt relative import if src is a package and this script is run as a module
-    # from ..src import qic_core # If run as a module e.g. python -m simulations.this_script
-    # Fallback for direct execution if qic_core is in the same dir or already in path
     try:
-        # If you set up sys.path in qic_core or it's discoverable
-        if 'qic_core' not in globals(): # check if already imported by a previous attempt
+        if 'qic_core' not in globals(): 
              print("Attempting to import qic_core directly (ensure it's in PYTHONPATH or same dir)")
              import qic_core
     except ImportError as e:
@@ -188,7 +182,6 @@ if __name__ == "__main__":
     target_backend_instance = None
     try:
         print("\nConnecting to IBM Quantum Runtime Service...")
-        # Make sure you have your account saved, e.g., QiskitRuntimeService.save_account(channel="ibm_quantum", token="YOUR_API_TOKEN")
         service = QiskitRuntimeService()
         print("Connected to IBM Quantum.")
         target_backend_instance = get_ibm_backend(service, TARGET_BACKEND_NAME, min_qubits=max(N_QUBITS_LIST) if N_QUBITS_LIST else 2)

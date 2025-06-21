@@ -187,8 +187,8 @@ paper/*.bbl
 paper/*.blg
 
 # Large data files
-data/
-*.npy
+#data/
+#*.npy
 *.npz
 
 # IDE specific
@@ -196,4 +196,4 @@ data/
 .idea/
 
 # Data folder
-data/
+#data/
