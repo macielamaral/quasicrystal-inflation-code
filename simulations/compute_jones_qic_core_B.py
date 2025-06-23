@@ -104,6 +104,7 @@ def calculate_jones_final(knot_key):
         if op_idx_0_based < 0 or op_idx_0_based > max_generator_idx:
             print(f"ERROR: Braid generator index {abs(val)} out of range.")
             return
+        # In our notation the braid is the inverse from the literature
         current_op = B_k_anyon_inv_list[op_idx_0_based] if val > 0 else B_k_anyon_list[op_idx_0_based]
         M_beta_anyon = M_beta_anyon @ current_op
     M_beta_anyon = M_beta_anyon.tocsc()
@@ -117,12 +118,21 @@ def calculate_jones_final(knot_key):
     minus_A_cubed = -A_cubed
     writhe_phase_factor = minus_A_cubed**(-writhe_B)
     
-    # --- FINAL CORRECTION ---
-    # Using the standard theoretical formula: V(A) = (-A^3)^(-w) * d^(n-2) * Tr(rho(beta))
-    # where d = phi is the quantum dimension of the anyon.
-    phi_power_factor = PHI**(N_strands - 2)
-    calculated_jones_value = writhe_phase_factor * phi_power_factor * trace_M_beta_qic
-    # --- END CORRECTION ---
+    # --- This is the CORRECTED formula ---
+    F_N_plus_2 = float(fibonacci(N_sites + 2))
+    phi_power_factor = PHI**(N_strands - 1)
+
+    if np.isclose(F_N_plus_2, 0):
+        calculated_jones_value = np.nan
+    else:
+        # Use the correct normalization factor
+        calculated_jones_value = writhe_phase_factor * (phi_power_factor / F_N_plus_2) * trace_M_beta_qic
+
+    print(f"\n  Trace(M_beta_qic) [T_QIC] = {trace_M_beta_qic:.8f}")
+    # Update the print statement to reflect the correct normalization
+    print(f"  Normalization (phi^(N-1)/F_N+2) approx {(phi_power_factor / F_N_plus_2):.6f}")
+    print(f"  Calculated V_L(t=exp(-i*2*pi/5)) = {calculated_jones_value:.8f}")
+
 
     print(f"\n  Trace(M_beta_qic) [T_QIC] = {trace_M_beta_qic:.8f}")
     print(f"  A_K&L parameter = {A_param_KL:.6f}")

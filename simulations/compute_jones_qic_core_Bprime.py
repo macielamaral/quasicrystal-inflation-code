@@ -117,7 +117,7 @@ def calculate_jones_with_prime_ops(knot_key):
         if op_idx_0_based >= len(B_k_prime_list):
             print(f"ERROR: Braid generator index {abs(val)} out of range.")
             return
-        #in our notation the braid is the inverse from the literature
+        # In our notation the braid is the inverse from the literature
         current_op = B_k_prime_inv_list[op_idx_0_based] if val > 0 else B_k_prime_list[op_idx_0_based] 
         M_beta_prime = M_beta_prime @ current_op
     M_beta_prime = M_beta_prime.tocsc()

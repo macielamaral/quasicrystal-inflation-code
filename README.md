@@ -109,17 +109,6 @@ All scripts include detailed doc-strings explaining parameters and expected outp
 
 ---
 
-## Citing
-
-```text
-@misc{amaral2025qic,
-      author       = {Marcelo M. Amaral},
-      title        = {Consistent Simulation of Fibonacci Anyon Braiding within a Qubit Quasicrystal Inflation Code},
-      howpublished = {arXiv:2506.xxxxx},
-      year         = {2025}
-}
-
-
 ## License
 
 This project is released under the **MIT license** (see `LICENSE`).
@@ -130,6 +119,3 @@ This project is released under the **MIT license** (see `LICENSE`).
 
 Marcelo M. Amaral
 Pull requests and issues are welcome.
-
-```
-```
